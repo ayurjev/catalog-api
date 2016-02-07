@@ -32,3 +32,15 @@ class NoNameForNewCategory(BaseServiceException):
     """ Не указано название новой рубрики """
     code = 4
     msg = "Не указано название новой рубрики"
+
+
+class CategoryNotFound(BaseServiceException):
+    """ Категория товаров не найдена """
+    code = 5
+    msg = "Категория товаров не найдена"
+
+
+class IncorrectValueForAttribute(BaseServiceException):
+    """ Некорректное значение аттрибута """
+    code = 6
+    msg = "Некорректное значение аттрибута"

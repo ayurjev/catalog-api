@@ -1,9 +1,6 @@
 """ Модели """
 
-import os
-import random
-import hashlib
-from datetime import datetime, timedelta
+import re
 from exceptions import *
 
 from pymongo import MongoClient, DESCENDING
@@ -16,6 +13,7 @@ class Catalog(object):
         self.client = MongoClient('mongo', 27017)
         self.items = self.client.db.items
         self.categories = self.client.db.categories
+        self.attributes = self.client.db.attributes
 
     def get_item(self, item_id: int) -> 'Item':
         """ Возвращает товар из коллекции по его идентификатору
@@ -31,12 +29,12 @@ class Catalog(object):
         item.title = item_data["title"]
         item.short = item_data["short"]
         item.body = item_data["body"]
-        item.img = item_data["img"]
+        item.imgs = item_data["imgs"]
         item.tags = item_data["tags"]
-        item.category = item_data["category"]
+        item.categories = item_data["categories"]
         item.cost = item_data["cost"]
         item.quantity = item_data["quantity"]
-        item.quantity = item_data["manufacturer"]
+        item.set_attributes(item_data["attributes"])
         return item
 
     def save_item(self, item: 'Item') -> int:
@@ -48,7 +46,7 @@ class Catalog(object):
             self.items.update_one({"_id": item.id}, {"$set": item.get_data()})
             return item.id
         else:
-            return self._insert_inc(item.get_data())
+            return self._insert_inc(item.get_data(), self.items)
 
     def delete_item(self, post_id: int) -> bool:
         """ Удаляет товар из коллекции
@@ -70,16 +68,40 @@ class Catalog(object):
             category = self.categories.find_one({"_id": slug}).get("name")
         params = {}
         if category:
-            params["category"] = category
+            params["categories"] = category
         if except_ids:
             params["_id"] = {"$nin": except_ids}
         return list(self.items.find(params, {"body": False}).sort([("_id", DESCENDING)]).limit(quantity or 10))
+
+    def get_bestsellers(self, category: str=None, slug: str=None, quantity: int=None, except_ids: list=None):
+        """ Возвращает лучшие товары из каталога
+        :param category:
+        :param slug:
+        :param quantity:
+        :param except_ids:
+        :return:
+        """
+        return self.get_items(category, slug, quantity, except_ids)
 
     def get_categories(self):
         """ Возвращает список рубрик блога
         :return:
         """
-        return [{"slug": c.get("_id"), "name": c.get("name")} for c in self.categories.find({})]
+        return [{"slug": c.get("slug"), "name": c.get("name")} for c in self.categories.find({})]
+
+    def get_category(self, category_slug: str) -> 'Category':
+        """ Возвращает рубрику из коллекции по ее идентификатору
+        :param category_slug:
+        :return:
+        """
+        category_data = self.categories.find_one({"_id": category_slug})
+        if not category_data:
+            raise CategoryNotFound()
+        category = Category()
+        category.id = category_data["_id"]
+        category.slug = category_data["slug"]
+        category.name = category_data["name"]
+        return category
 
     def create_category(self, category_name: str, slug: str) -> bool:
         """ Создает новую рубрику в блоге
@@ -90,31 +112,125 @@ class Catalog(object):
         if not category_name:
             raise NoNameForNewCategory()
         try:
-            self.categories.insert_one({"_id": slug, "name": category_name})
+            self.categories.insert_one({"_id": slug, "slug": slug, "name": category_name})
             return True
         except DuplicateKeyError:
             raise CategoryAlreadyExists()
 
-    def _insert_inc(self, doc: dict) -> int:
+    def get_attributes(self, categories: list=None) -> ['AttributeScheme']:
+        """ Возвращает список аттрибутов, специфичных для блога
+        :param categories:
+        :return:
+        """
+        return \
+            [AttributeScheme(a) for a in self.attributes.find({"categories": {"$exists": False}})] + \
+            ([AttributeScheme(a) for a in self.attributes.find({"categories": categories})] if categories else [])
+
+    def get_attribute_scheme(self, attribute_scheme_id) -> 'AttributeScheme':
+        """ Возвращает аттрибут по его идентификатору
+        :param attribute_scheme_id:
+        :return:
+        """
+        return AttributeScheme(self.attributes.find_one({"_id": attribute_scheme_id}))
+
+    def save_attribute_scheme(self, attribute_scheme: 'AttributeScheme'):
+        """ Сохраняет новый тип аттрибута
+        :param attribute_scheme:
+        :return:
+        """
+        if attribute_scheme.id:
+            self.attributes.update_one({"_id": attribute_scheme.id}, {"$set": attribute_scheme.get_data()})
+        else:
+            self._insert_inc(attribute_scheme.get_data(), self.attributes)
+
+    @staticmethod
+    def _insert_inc(doc: dict, collection) -> int:
         """ Вставляет новый документ в коллекцию , генерируя инкрементный ключ - привет mongodb...
         :param doc: Документ для вставки в коллекцию (без указания _id)
+        :param collection: Коллекция для вставки
         :return:
         """
         while True:
-            cursor = self.items.find({}, {"_id": 1}).sort([("_id", DESCENDING)]).limit(1)
+            cursor = collection.find({}, {"_id": 1}).sort([("_id", DESCENDING)]).limit(1)
             try:
                 doc["_id"] = next(cursor)["_id"] + 1
             except StopIteration:
                 doc["_id"] = 1
             try:
                 doc["id"] = doc["_id"]
-                self.items.insert_one(doc)
+                collection.insert_one(doc)
                 break
             except DuplicateKeyError:
                 pass
         return doc["_id"]
 
 catalog = Catalog()
+
+
+class AttributeScheme(object):
+    """ Класс для работы с аттрибутами товаров (класс аттрибута) """
+    def __init__(self, data):
+        self.id = int(data.get("_id"))
+        self.name = data.get("name")
+        self.regex = data.get("regex")
+        self.mask = data.get("mask")
+        self.options = data.get("options")
+        self.categories = data.get("categories")
+        self.catalog = catalog
+
+    def get_data(self) -> dict:
+        """ Возвращает данные аттрибута в виде словаря """
+        return {
+            "_id": self.id, "id": self.id, "name": self.name,
+            "options": self.options, "categories": self.categories,
+            "regex": self.regex, "mask": self.mask
+        }
+
+    def save(self):
+        """ Сохраняет новый тип аттрибута
+        :return:
+        """
+        self.catalog.save_attribute_scheme(self)
+
+
+class Attribute(object):
+    """ Класс для работы с аттрибутами товаров """
+    def __init__(self, data):
+        self.catalog = catalog
+        self.id = data.get("id")
+
+        self.attribute_scheme = self.catalog.get_attribute_scheme(self.id)
+        self.name = self.attribute_scheme.name
+        if self.attribute_scheme.options and data.get("value") not in self.attribute_scheme.options:
+            IncorrectValueForAttribute(
+                "'%s' - некорректное значение для свойства '%s'" % (data.get("value"), self.name)
+            )
+        elif self.attribute_scheme.regex and not re.match(self.attribute_scheme.regex, data.get("value")):
+            IncorrectValueForAttribute(
+                "'%s' - некорректное значение для свойства '%s'" % (data.get("value"), self.name)
+            )
+        else:
+            self.value = data.get("value")
+
+    def get_data(self):
+        """
+        Возвращает данные для сохранения в бд
+        :return:
+        """
+        return {"id": self.id, "name": self.name, "value": self.value}
+
+
+class Category(object):
+    """ Класс для работы с категориями товаров """
+    def __init__(self):
+        self.id = None
+        self.name = ""
+        self.slug = ""
+        self.img = ""
+        self.attributes = []
+        self.childs = []
+        self.catalog = catalog
+
 
 class Item(object):
     """ Модель для работы с товаром """
@@ -124,13 +240,25 @@ class Item(object):
         self.title = None
         self.short = None
         self.body = None
-        self.img = None
+        self.imgs = []
         self.tags = []
-        self.category = []
+        self.categories = []
         self.cost = 0
         self.quantity = 0
-        self.manufacturer = None
+        self.attributes = []
         self.catalog = catalog
+
+    def set_attributes(self, income_attributes: list):
+        """ Сохраняет аттрибуты товара согласно существующей схеме
+        :param income_attributes:
+        :return:
+        """
+        available_attributes = [a.id for a in self.catalog.get_attributes(self.categories)]
+        self.attributes = [
+            Attribute(income_attribute_data)
+            for income_attribute_data in income_attributes
+            if income_attribute_data.get("id") in available_attributes
+        ]
 
     def validate(self):
         """ Валидация модели поста
@@ -153,6 +281,6 @@ class Item(object):
         return {
             "_id": self.id, "id": self.id, "article": self.article,
             "title": self.title, "short": self.short, "body": self.body,
-            "img": self.img, "tags": self.tags, "category": self.category,
-            "cost": self.cost, "quantity": self.quantity, "manufacturer": self.manufacturer
+            "imgs": self.imgs, "tags": self.tags, "categories": self.categories,
+            "cost": self.cost, "quantity": self.quantity, "attributes": [a.get_data() for a in self.attributes]
         }

@@ -31,7 +31,25 @@ class Controller(EnviController):
 
     @classmethod
     @error_format
-    def get_posts(cls, request: Request, *args, **kwargs):
+    def get_bestsellers(cls, request: Request, *args, **kwargs):
+        """ Возвращает лучшие товары из каталога с их кратким представлением
+        :param request:
+        :param args:
+        :param kwargs:
+        :return:
+        """
+        return {
+            "items": catalog.get_bestsellers(
+                request.get("category", False),
+                request.get("slug", False),
+                request.get("quantity", False),
+                request.get("except", [])
+            )
+        }
+
+    @classmethod
+    @error_format
+    def get_items(cls, request: Request, *args, **kwargs):
         """ Возвращает товары с их кратким представлением
         :param request:
         :param args:
@@ -39,7 +57,7 @@ class Controller(EnviController):
         :return:
         """
         return {
-            "posts": catalog.get_items(
+            "items": catalog.get_items(
                 request.get("category", False),
                 request.get("slug", False),
                 request.get("quantity", False),
@@ -57,6 +75,19 @@ class Controller(EnviController):
         :return:
         """
         return {"categories": catalog.get_categories()}
+
+    @classmethod
+    @error_format
+    def get_attributes(cls, request: Request, *args, **kwargs):
+        """ Возвращает список аттрибутов товаров
+        :param request:
+        :param args:
+        :param kwargs:
+        :return:
+        """
+        return {
+            "attributes": [a.get_data() for a in catalog.get_attributes(request.get("category", None))]
+        }
 
     @classmethod
     @error_format
@@ -84,13 +115,13 @@ class Controller(EnviController):
         item.title = request.get("title")
         item.article = request.get("article")
         item.short = request.get("short")
-        item.img = request.get("img", None)
+        item.imgs = request.get("imgs", [])
         item.body = request.get("body", "")
         item.tags = request.get("tags", [])
-        item.category = request.get("category", [])
+        item.categories = request.get("categories", [])
         item.cost = request.get("cost", True)
         item.quantity = request.get("quantity", True)
-        item.manufacturer = request.get("manufacturer", True)
+        item.set_attributes(request.get("attributes", []))
         return {"item_id": item.save()}
 
     @classmethod
