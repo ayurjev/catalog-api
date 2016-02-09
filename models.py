@@ -24,17 +24,18 @@ class Catalog(object):
         if not item_data:
             raise ItemNotFound()
         item = Item()
-        item.id = item_data["_id"]
-        item.article = item_data["article"]
-        item.title = item_data["title"]
-        item.short = item_data["short"]
-        item.body = item_data["body"]
-        item.imgs = item_data["imgs"]
-        item.tags = item_data["tags"]
-        item.categories = item_data["categories"]
-        item.cost = item_data["cost"]
-        item.quantity = item_data["quantity"]
-        item.set_attributes(item_data["attributes"])
+        item.id = item_data.get("_id")
+        item.article = item_data.get("article")
+        item.title = item_data.get("title")
+        item.short = item_data.get("short")
+        item.body = item_data.get("body")
+        item.imgs = item_data.get("imgs")
+        item.tags = item_data.get("tags")
+        item.categories = item_data.get("categories")
+        item.cost = item_data.get("cost")
+        item.discount = item_data.get("discount")
+        item.quantity = item_data.get("quantity")
+        item.set_attributes(item_data.get("attributes"))
         return item
 
     def save_item(self, item: 'Item') -> int:
@@ -65,7 +66,8 @@ class Catalog(object):
         :return:
         """
         if not category and slug:
-            category = self.categories.find_one({"_id": slug}).get("name")
+            category = self.categories.find_one({"slug": slug})
+            category = category.get("name") if category else None
         params = {}
         if category:
             params["categories"] = category
@@ -87,7 +89,7 @@ class Catalog(object):
         """ Возвращает список рубрик блога
         :return:
         """
-        return [{"slug": c.get("slug"), "name": c.get("name")} for c in self.categories.find({})]
+        return [Category(c).get_data() for c in self.categories.find({})]
 
     def get_category(self, category_slug: str) -> 'Category':
         """ Возвращает рубрику из коллекции по ее идентификатору
@@ -97,11 +99,7 @@ class Catalog(object):
         category_data = self.categories.find_one({"_id": category_slug})
         if not category_data:
             raise CategoryNotFound()
-        category = Category()
-        category.id = category_data["_id"]
-        category.slug = category_data["slug"]
-        category.name = category_data["name"]
-        return category
+        return Category(category_data)
 
     def create_category(self, category_name: str, slug: str) -> bool:
         """ Создает новую рубрику в блоге
@@ -202,11 +200,11 @@ class Attribute(object):
         self.attribute_scheme = self.catalog.get_attribute_scheme(self.id)
         self.name = self.attribute_scheme.name
         if self.attribute_scheme.options and data.get("value") not in self.attribute_scheme.options:
-            IncorrectValueForAttribute(
+            raise IncorrectValueForAttribute(
                 "'%s' - некорректное значение для свойства '%s'" % (data.get("value"), self.name)
             )
         elif self.attribute_scheme.regex and not re.match(self.attribute_scheme.regex, data.get("value")):
-            IncorrectValueForAttribute(
+            raise IncorrectValueForAttribute(
                 "'%s' - некорректное значение для свойства '%s'" % (data.get("value"), self.name)
             )
         else:
@@ -222,14 +220,23 @@ class Attribute(object):
 
 class Category(object):
     """ Класс для работы с категориями товаров """
-    def __init__(self):
-        self.id = None
-        self.name = ""
-        self.slug = ""
-        self.img = ""
-        self.attributes = []
-        self.childs = []
+    def __init__(self, data):
+        self.id = data.get("_id")
+        self.name = data.get("name")
+        self.slug = data.get("slug")
+        self.img = data.get("img")
+        self.attributes = data.get("attributes")
+        self.childs = [Category(cc) for cc in data.get("childs", [])]
         self.catalog = catalog
+
+    def get_data(self) -> dict:
+        """ Возвращает данные категории в виде словаря
+        :return:
+        """
+        return {
+            "slug": self.slug, "name": self.name, "img": self.img, "id": self.id,
+            "childs": [cc.get_data() for cc in self.childs]
+        }
 
 
 class Item(object):
@@ -244,9 +251,25 @@ class Item(object):
         self.tags = []
         self.categories = []
         self.cost = 0
+        self.discount = 0
         self.quantity = 0
         self.attributes = []
         self.catalog = catalog
+
+    @property
+    def img(self):
+        """ Возвращает основное изображение товара
+        :return:
+        """
+        if len(self.imgs):
+            return self.imgs[0]
+
+    @property
+    def cost_with_discount(self):
+        """ Стоимсть товара с учетом скидки
+        :return:
+        """
+        return self.cost - int(self.cost * (self.discount/100) if self.discount else self.cost)
 
     def set_attributes(self, income_attributes: list):
         """ Сохраняет аттрибуты товара согласно существующей схеме
@@ -281,6 +304,8 @@ class Item(object):
         return {
             "_id": self.id, "id": self.id, "article": self.article,
             "title": self.title, "short": self.short, "body": self.body,
-            "imgs": self.imgs, "tags": self.tags, "categories": self.categories,
-            "cost": self.cost, "quantity": self.quantity, "attributes": [a.get_data() for a in self.attributes]
+            "imgs": self.imgs, "img": self.img,
+            "tags": self.tags, "categories": self.categories,
+            "cost": self.cost, "discount": self.discount, "quantity": self.quantity,
+            "attributes": [a.get_data() for a in self.attributes], "cost_with_discount": self.cost_with_discount
         }

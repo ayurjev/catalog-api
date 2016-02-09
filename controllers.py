@@ -109,7 +109,7 @@ class Controller(EnviController):
         :return:
         """
         if request.get("id", False):
-            item = catalog.get_item(request.get("id"))
+            item = catalog.get_item(int(request.get("id")))
         else:
             item = Item()
         item.title = request.get("title")
@@ -119,8 +119,9 @@ class Controller(EnviController):
         item.body = request.get("body", "")
         item.tags = request.get("tags", [])
         item.categories = request.get("categories", [])
-        item.cost = request.get("cost", True)
-        item.quantity = request.get("quantity", True)
+        item.cost = int(request.get("cost", 0))
+        item.discount = int(request.get("discount", 0))
+        item.quantity = int(request.get("quantity", 0))
         item.set_attributes(request.get("attributes", []))
         return {"item_id": item.save()}
 

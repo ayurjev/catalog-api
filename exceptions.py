@@ -5,8 +5,13 @@
 class BaseServiceException(Exception):
     """ Базовый класс исключений """
     msg = "Ошибка"
+
+    def __init__(self, msg=None):
+        self.msg = msg if msg else self.msg
+
     def __str__(self):
         return self.msg
+
     code = 0
 
 
