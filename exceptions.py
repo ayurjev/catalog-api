@@ -49,3 +49,9 @@ class IncorrectValueForAttribute(BaseServiceException):
     """ Некорректное значение аттрибута """
     code = 6
     msg = "Некорректное значение аттрибута"
+
+
+class CustomerNotFound(BaseServiceException):
+    """ Запрошенный товар не найден """
+    code = 7
+    msg = "Запрошенный покупатель не найден"

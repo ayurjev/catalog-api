@@ -21,7 +21,7 @@ RUN wget http://dev.mysql.com/get/Downloads/Connector-Python/mysql-connector-pyt
 RUN pip3 install git+https://git@github.com/ayurjev/envi.git#egg=envi && \
     pip3 install git+https://git@github.com/ayurjev/suit.git#egg=suit && \
     pip3 install git+https://git@github.com/ayurjev/mapex.git#egg=mapex && \
-    pip3 install uwsgi webtest requests pymongo
+    pip3 install uwsgi webtest requests pymongo elasticsearch
 
 RUN echo '#!/bin/bash' >> /usr/local/bin/runtests && \
     echo 'python3 -m unittest discover /var/www/' >> /usr/local/bin/runtests && \

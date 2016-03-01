@@ -2,15 +2,41 @@
 
 import re
 from exceptions import *
-
+from elasticsearch import Elasticsearch
 from pymongo import MongoClient, DESCENDING
 from pymongo.errors import DuplicateKeyError
 
+mongo_client = MongoClient('mongo', 27017)
+es_client = Elasticsearch([{'host': 'elasticsearch', 'port': 9200}])
+
+
+def _insert_inc(doc: dict, collection) -> int:
+    """ Вставляет новый документ в коллекцию , генерируя инкрементный ключ - привет mongodb...
+    :param doc: Документ для вставки в коллекцию (без указания _id)
+    :param collection: Коллекция для вставки
+    :return:
+    """
+    while True:
+        cursor = collection.find({}, {"_id": 1}).sort([("_id", DESCENDING)]).limit(1)
+        try:
+            doc["_id"] = next(cursor)["_id"] + 1
+        except StopIteration:
+            doc["_id"] = 1
+        try:
+            doc["id"] = doc["_id"]
+            collection.insert_one(doc)
+            break
+        except DuplicateKeyError:
+            pass
+    return doc["_id"]
+
+
+################################################# Catalog ###########################################################
 
 class Catalog(object):
     """ Модель для работы с каталогом """
     def __init__(self):
-        self.client = MongoClient('mongo', 27017)
+        self.client = mongo_client
         self.items = self.client.db.items
         self.categories = self.client.db.categories
         self.attributes = self.client.db.attributes
@@ -47,7 +73,7 @@ class Catalog(object):
             self.items.update_one({"_id": item.id}, {"$set": item.get_data()})
             return item.id
         else:
-            return self._insert_inc(item.get_data(), self.items)
+            return _insert_inc(item.get_data(), self.items)
 
     def delete_item(self, post_id: int) -> bool:
         """ Удаляет товар из коллекции
@@ -139,28 +165,36 @@ class Catalog(object):
         if attribute_scheme.id:
             self.attributes.update_one({"_id": attribute_scheme.id}, {"$set": attribute_scheme.get_data()})
         else:
-            self._insert_inc(attribute_scheme.get_data(), self.attributes)
+            _insert_inc(attribute_scheme.get_data(), self.attributes)
 
-    @staticmethod
-    def _insert_inc(doc: dict, collection) -> int:
-        """ Вставляет новый документ в коллекцию , генерируя инкрементный ключ - привет mongodb...
-        :param doc: Документ для вставки в коллекцию (без указания _id)
-        :param collection: Коллекция для вставки
+    def autocomplete(self, term: str):
+        """ Подсказки для поиска товаров по каталогу
+        :param term:
         :return:
         """
-        while True:
-            cursor = collection.find({}, {"_id": 1}).sort([("_id", DESCENDING)]).limit(1)
-            try:
-                doc["_id"] = next(cursor)["_id"] + 1
-            except StopIteration:
-                doc["_id"] = 1
-            try:
-                doc["id"] = doc["_id"]
-                collection.insert_one(doc)
-                break
-            except DuplicateKeyError:
-                pass
-        return doc["_id"]
+        q = {
+            "size": 2000,
+            "query": {
+                "bool": {
+                    "should": [
+                        {
+                            "wildcard": {
+                                "title": {
+                                    "value": "*%s*" % single_term
+                                }
+                            }
+                        }
+                        for single_term in term.strip().split(" ") if len(single_term.strip())
+                    ]
+                }
+            }
+        }
+        result = es_client.search(index="items", body=q)
+        result = [
+            {"id": int(m.get("_id")), "title": m.get("_source").get("title")}
+            for m in result.get("hits").get("hits")
+        ]
+        return result
 
 catalog = Catalog()
 
@@ -269,7 +303,7 @@ class Item(object):
         """ Стоимсть товара с учетом скидки
         :return:
         """
-        return self.cost - int(self.cost * (self.discount/100) if self.discount else self.cost)
+        return (self.cost - int(self.cost * (self.discount/100))) if self.discount else self.cost
 
     def set_attributes(self, income_attributes: list):
         """ Сохраняет аттрибуты товара согласно существующей схеме
@@ -309,3 +343,223 @@ class Item(object):
             "cost": self.cost, "discount": self.discount, "quantity": self.quantity,
             "attributes": [a.get_data() for a in self.attributes], "cost_with_discount": self.cost_with_discount
         }
+
+
+################################################ Customers #########################################################
+
+
+class Customers(object):
+    """ Модель для работы с покупателем """
+    def __init__(self):
+        self.client = mongo_client
+        self.customers = self.client.db.customers
+
+    def ensure_existance(self, customer_id: int):
+        """ Создает нового покупателя, если его еще нет
+        :param customer_id:
+        :return:
+        """
+        try:
+            self.get_customer(customer_id)
+        except CustomerNotFound:
+            cart = Carts().get_cart()
+            wishlist = Carts().get_cart()
+            customer = Customer()
+            customer.name = None
+            customer.cart_id = cart.id
+            customer.wishlist_id = wishlist.id
+            customer.id = self.save_customer(customer)
+
+    def get_customer(self, customer_id: int) -> 'Customer':
+        """ Возвращает покупателя из коллекции по его идентификатору
+        :param customer_id:
+        :return:
+        """
+        customer_data = self.customers.find_one({"_id": int(customer_id)})
+        if not customer_data:
+            raise CustomerNotFound()
+        customer = Customer()
+        customer.id = customer_data.get("_id")
+        customer.name = customer_data.get("name")
+        customer.cart_id = customer_data.get("cart_id")
+        customer.wishlist_id = customer_data.get("wishlist_id")
+        return customer
+
+    def save_customer(self, customer: 'Customer') -> int:
+        """ Сохраняет покупателя в коллекции и возвращает его _id
+        :param customer:
+        :return:
+        """
+        if customer.id:
+            self.customers.update_one({"_id": customer.id}, {"$set": customer.get_data()})
+            return customer.id
+        else:
+            return _insert_inc(customer.get_data(), self.customers)
+
+
+customers = Customers()
+
+
+class Customer(object):
+    """ Модель для работы с покупателем """
+    def __init__(self):
+        self.id = None
+        self.name = None
+        self.cart_id = None
+        self.wishlist_id = None
+        self.customers = customers
+
+    def save(self):
+        """ Сохранение покупателя
+        :return:
+        """
+        return self.customers.save_customer(self)
+
+    def get_data(self):
+        """ Возвращает словарь с данными из модели покупателя для записи в БД
+        :return:
+        """
+        return {
+            "_id": self.id, "id": self.id, "name": self.name,
+            "cart_id": self.cart_id, "wishlist_id": self.wishlist_id
+        }
+
+
+
+################################################## Carts ############################################################
+
+
+class Carts(object):
+    """ Модель для работы с корзиной покупателя """
+    def __init__(self):
+        self.client = mongo_client
+        self.carts = self.client.db.carts
+
+    def get_cart(self, cart_id: int=None) -> 'Cart':
+        """ Возвращает корзину покупателя из коллекции по ее идентификатору
+        :param cart_id:
+        :return:
+        """
+        new_cart = False
+        cart_data = None
+        if cart_id:
+            cart_data = self.carts.find_one({"_id": int(cart_id)})
+        if not cart_data:
+            new_cart = True
+            cart_data = {}
+        cart = Cart()
+        cart.id = cart_data.get("_id")
+        cart.items = [ItemInCart(iicdata) for iicdata in cart_data.get("items")] if cart_data.get("items", []) else []
+        if new_cart:
+            cart.id = self.save_cart(cart)
+        return cart
+
+    def save_cart(self, cart: 'Cart') -> int:
+        """ Сохраняет корзину покупателя в коллекции и возвращает ее _id
+        :param cart:
+        :return:
+        """
+        if cart.id:
+            self.carts.update_one({"_id": cart.id}, {"$set": cart.get_data()})
+            return cart.id
+        else:
+            return _insert_inc(cart.get_data(), self.carts)
+
+
+carts = Carts()
+
+
+class Cart(object):
+    """ Модель для работы с корзиной покупателя """
+    def __init__(self):
+        self.id = None
+        self.items = []
+        self.carts = carts
+
+    @property
+    def total_cost(self):
+        """ Общая стоимость корзины
+        :return:
+        """
+        return int(sum([i.item.cost_with_discount * i.quantity for i in self.items]))
+
+    @property
+    def quantity(self):
+        """ Общая количество товаров в корзине
+        :return:
+        """
+        return int(sum([i.quantity for i in self.items]))
+
+    def add_item(self, item_id: int, quantity: int):
+        """ Добавляет новый товар в корзину
+        :param item_id:
+        :param quantity:
+        :return:
+        """
+        self.items.append(ItemInCart({"id": item_id, "quantity": quantity}))
+        self.save()
+
+    def remove_item(self, item_id: int):
+        """ Удаляет товар из корзины
+        :param item_id:
+        :return:
+        """
+        self.items = [i for i in self.items if i.item.id != item_id]
+        self.save()
+
+    def set_quantity_for_item(self, item_id: int, quantity: int):
+        """ Меняет количество товара в корзине
+        :param item_id:
+        :param quantity:
+        :return:
+        """
+        self.remove_item(item_id)
+        self.add_item(item_id, quantity)
+
+    def clear(self):
+        """ Очищает корзину
+        :return:
+        """
+        self.items = []
+        self.save()
+
+    def save(self):
+        """ Сохранение покупателя
+        :return:
+        """
+        return self.carts.save_cart(self)
+
+    def get_data(self):
+        """ Возвращает словарь с данными из модели покупателя для записи в БД
+        :return:
+        """
+        return {
+            "_id": self.id, "id": self.id, "quantity": self.quantity, "total_cost": self.total_cost,
+            "items": [iic.get_data() for iic in self.items]
+        }
+
+    def copy_to(self, other_cart: 'Cart') -> bool:
+        """ Копирует одну корзину в другую
+        :param other_cart:
+        :return:
+        """
+        for item_in_cart in self.items:
+            other_cart.add_item(item_in_cart.item.id, item_in_cart.quantity)
+        return True
+
+
+class ItemInCart(object):
+    """ Класс для представления позиции в корзине """
+    def __init__(self, data: dict=None):
+        if not data:
+            data = {}
+        self.item = catalog.get_item(data.get("id"))
+        self.quantity = data.get("quantity")
+        self.title = self.item.title
+        self.cost = self.item.cost_with_discount * self.quantity
+
+    def get_data(self):
+        """ Возвращает данные для сохранения в БД
+        :return:
+        """
+        return {"id": self.item.id, "title": self.title, "cost": self.cost, "quantity": self.quantity}
