@@ -122,7 +122,7 @@ class Catalog(object):
         :param category_slug:
         :return:
         """
-        category_data = self.categories.find_one({"_id": category_slug})
+        category_data = self.categories.find_one({"slug": category_slug})
         if not category_data:
             raise CategoryNotFound()
         return Category(category_data)

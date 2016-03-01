@@ -86,7 +86,7 @@ class Controller(EnviController):
         :param kwargs:
         :return:
         """
-        return {"category": catalog.get_category(request.get("slug"))}
+        return {"category": catalog.get_category(request.get("slug")).get_data()}
 
     @classmethod
     @error_format
