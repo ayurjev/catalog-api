@@ -189,6 +189,19 @@ class Controller(EnviController):
 
     @classmethod
     @error_format
+    def update_customer(cls, request: Request, *args, **kwargs):
+        """ Метод для изменения объекта покупателя
+        :param request:
+        :param args:
+        :param kwargs:
+        :return:
+        """
+        customer = customers.get_customer(int(request.get("customer_id")))
+        customer.update(request.get("name"), request.get("address"))
+        return customer.get_data() if customer else None
+
+    @classmethod
+    @error_format
     def get_cart(cls, request: Request, *args, **kwargs):
         """ Метод для получения объекта корзины покупателя
         :param request:
@@ -376,7 +389,7 @@ class Controller(EnviController):
             "orders": [
                 order.get_data()
                 for order in orders.get_orders_by_customer_id(
-                    int(request.get("customer_id")), limit=request.get("limit")
+                    int(request.get("customer_id")), limit=request.get("limit", 20)
                 )
             ]
         }

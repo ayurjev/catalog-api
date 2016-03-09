@@ -382,6 +382,7 @@ class Customers(object):
         customer = Customer()
         customer.id = customer_data.get("_id")
         customer.name = customer_data.get("name")
+        customer.address = customer_data.get("address")
         customer.cart_id = customer_data.get("cart_id")
         customer.wishlist_id = customer_data.get("wishlist_id")
         return customer
@@ -406,11 +407,23 @@ class Customer(object):
     def __init__(self):
         self.id = None
         self.name = None
+        self.address = None
         self.cart_id = None
         self.wishlist_id = None
         self.customers = customers
 
-    def save(self):
+    def update(self, name: str, address: str) -> bool:
+        """ Обновляет данные покупателя
+        :param name:
+        :param address:
+        :return:
+        """
+        self.name = name
+        self.address = address
+        self.save()
+        return True
+
+    def save(self) -> int:
         """ Сохранение покупателя
         :return:
         """
@@ -421,7 +434,7 @@ class Customer(object):
         :return:
         """
         return {
-            "_id": self.id, "id": self.id, "name": self.name,
+            "_id": self.id, "id": self.id, "name": self.name, "address": self.address,
             "cart_id": self.cart_id, "wishlist_id": self.wishlist_id
         }
 
@@ -436,7 +449,7 @@ class Carts(object):
         self.client = mongo_client
         self.carts = self.client.db.carts
 
-    def get_cart(self, cart_id: Optional[int,None]=None) -> 'Cart':
+    def get_cart(self, cart_id: Optional[int]=None) -> 'Cart':
         """ Возвращает корзину покупателя из коллекции по ее идентификатору
         :param cart_id:
         :return:
@@ -646,7 +659,9 @@ class Orders(object):
         """
         return [
             self.build_order(order_data)
-            for order_data in self.orders.find({"customer_id": int(customer_id)}).limit(limit)
+            for order_data in self.orders.find(
+                {"customer_id": int(customer_id)}).limit(limit).sort([("created_dateime", DESCENDING)]
+            )
         ]
 
 
@@ -663,6 +678,13 @@ class Order(object):
         self.cost = None
         self.quantity = None
         self.money_received = None
+
+    @property
+    def state_name(self):
+        """ Строковое обозначение статуса заказа
+        :return:
+        """
+        return OrderStatesNames.get(self.state)
 
     def add_item(self, item_id: int, quantity: int):
         """ Добавляет новый товар в корзину
@@ -712,7 +734,7 @@ class Order(object):
             "items": [iic.get_data() for iic in self.items],
             "customer_id": self.customer_id,
             "created_datetime": self.created_datetime, "done_datetime": self.done_datetime,
-            "state": self.state, "money_received": self.money_received
+            "state": self.state, "state_name": self.state_name, "money_received": self.money_received
         }
 
 
