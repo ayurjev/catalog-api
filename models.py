@@ -3,9 +3,10 @@
 import re
 from exceptions import *
 from elasticsearch import Elasticsearch
+from datetime import datetime
 from pymongo import MongoClient, DESCENDING
 from pymongo.errors import DuplicateKeyError
-
+from typing import Optional
 mongo_client = MongoClient('mongo', 27017)
 es_client = Elasticsearch([{'host': 'elasticsearch', 'port': 9200}])
 
@@ -435,7 +436,7 @@ class Carts(object):
         self.client = mongo_client
         self.carts = self.client.db.carts
 
-    def get_cart(self, cart_id: int=None) -> 'Cart':
+    def get_cart(self, cart_id: Optional[int,None]=None) -> 'Cart':
         """ Возвращает корзину покупателя из коллекции по ее идентификатору
         :param cart_id:
         :return:
@@ -474,7 +475,6 @@ class Cart(object):
     def __init__(self):
         self.id = None
         self.items = []
-        self.carts = carts
 
     @property
     def total_cost(self):
@@ -527,10 +527,10 @@ class Cart(object):
         """ Сохранение покупателя
         :return:
         """
-        return self.carts.save_cart(self)
+        return Carts().save_cart(self)
 
     def get_data(self):
-        """ Возвращает словарь с данными из модели покупателя для записи в БД
+        """ Возвращает словарь с данными из модели корзины покупателя для записи в БД
         :return:
         """
         return {
@@ -563,3 +563,176 @@ class ItemInCart(object):
         :return:
         """
         return {"id": self.item.id, "title": self.title, "cost": self.cost, "quantity": self.quantity}
+
+
+
+################################################## Orders ############################################################
+
+class OrderStates(object):
+    """ Статусы заказов """
+    Created = 1
+    InProgress = 2
+    Done = 3
+
+OrderStatesNames = {OrderStates.Created: "Создан", OrderStates.InProgress: "Выполняется", OrderStates.Done: "Выполнен"}
+
+
+class Orders(object):
+    """ Модель для работы с заказами """
+    def __init__(self):
+        self.client = mongo_client
+        self.orders = self.client.db.orders
+
+    def create_order(self, customer_id: int) -> int:
+        """ Создает новый заказ
+        :param customer_id:
+        :return:
+        """
+        customer = Customers().get_customer(customer_id)
+        cart = Carts().get_cart(customer.cart_id)
+        order = Order()
+        cart.copy_to(order)
+        order.cost = cart.total_cost
+        order.quantity = cart.quantity
+        order.customer_id = customer_id
+        order.created_datetime = datetime.now()
+        order.state = OrderStates.Created
+        return self.save_order(order)
+
+    def save_order(self, order: 'Order') -> int:
+        """ Сохраняет заказ покупателя в коллекции и возвращает его _id
+        :param order:
+        :return:
+        """
+        if order.id:
+            self.orders.update_one({"_id": order.id}, {"$set": order.get_data()})
+            return order.id
+        else:
+            return _insert_inc(order.get_data(), self.orders)
+
+    def get_order(self, order_id: int) -> 'Order':
+        """ Возвращает заказ покупателя из коллекции по его идентификатору
+        :param order_id:
+        :return:
+        """
+        order_data = self.orders.find_one({"_id": int(order_id)})
+        if not order_data:
+            raise OrderNotFound()
+        return self.build_order(order_data)
+
+    @staticmethod
+    def build_order(order_data: dict) -> 'Order':
+        """ Собирает объект заказа из словаря с даннами
+        :param order_data:
+        :return:
+        """
+        order = Order()
+        order.id = order_data.get("_id")
+        order.items = [
+            ItemInOrder(iicdata) for iicdata in order_data.get("items")
+        ] if order_data.get("items", []) else []
+        order.customer_id = order_data.get("customer_id")
+        order.created_datetime = order_data.get("created_datetime")
+        order.done_datetime = order_data.get("done_datetime")
+        order.state = order_data.get("state")
+        order.money_received = order_data.get("money_received")
+        return order
+
+    def get_orders_by_customer_id(self, customer_id: int, limit=20) -> ['Order']:
+        """ Возвращает список заказов пользователя
+        :param customer_id:
+        :param limit:
+        :return:
+        """
+        return [
+            self.build_order(order_data)
+            for order_data in self.orders.find({"customer_id": int(customer_id)}).limit(limit)
+        ]
+
+
+class Order(object):
+    """ Модель для работы с заказом """
+
+    def __init__(self):
+        self.id = None
+        self.items = []
+        self.customer_id = None
+        self.created_datetime = None
+        self.done_datetime = None
+        self.state = None
+        self.cost = None
+        self.quantity = None
+        self.money_received = None
+
+    def add_item(self, item_id: int, quantity: int):
+        """ Добавляет новый товар в корзину
+        :param item_id:
+        :param quantity:
+        :return:
+        """
+        self.items.append(ItemInOrder({"id": item_id, "quantity": quantity}))
+        self.save()
+
+    def remove_item(self, item_id: int):
+        """ Удаляет товар из корзины
+        :param item_id:
+        :return:
+        """
+        self.items = [i for i in self.items if i.item.id != item_id]
+        self.save()
+
+    def set_quantity_for_item(self, item_id: int, quantity: int):
+        """ Меняет количество товара в корзине
+        :param item_id:
+        :param quantity:
+        :return:
+        """
+        self.remove_item(item_id)
+        self.add_item(item_id, quantity)
+
+    def clear(self):
+        """ Очищает корзину
+        :return:
+        """
+        self.items = []
+        self.save()
+
+    def save(self):
+        """ Сохранение заказа
+        :return:
+        """
+        return Orders().save_order(self)
+
+    def get_data(self) -> dict:
+        """ Возвращает словарь с данными из модели корзины покупателя для записи в БД
+        :return:
+        """
+        return {
+            "_id": self.id, "id": self.id, "quantity": self.quantity, "cost": self.cost,
+            "items": [iic.get_data() for iic in self.items],
+            "customer_id": self.customer_id,
+            "created_datetime": self.created_datetime, "done_datetime": self.done_datetime,
+            "state": self.state, "money_received": self.money_received
+        }
+
+
+class ItemInOrder(object):
+    """ Класс для представления позиции в заказе """
+    def __init__(self, data: dict=None):
+        if not data:
+            data = {}
+        self.id = data.get("id")
+        self.quantity = data.get("quantity")
+        if not data.get("cost") and not data.get("title"):
+            item = catalog.get_item(data.get("id"))
+            self.title = item.title
+            self.cost = item.cost_with_discount * self.quantity
+        else:
+            self.title = data.get("title")
+            self.cost = data.get("cost")
+
+    def get_data(self) -> dict:
+        """ Возвращает данные для сохранения в БД
+        :return:
+        """
+        return {"id": self.id, "title": self.title, "cost": self.cost, "quantity": self.quantity}

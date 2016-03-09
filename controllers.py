@@ -2,12 +2,14 @@
 
 import json
 from envi import Controller as EnviController, Request
-from models import Catalog, Item, Customers, Carts
+from models import Catalog, Item, Customers, Carts, Orders
 from exceptions import BaseServiceException
 
 catalog = Catalog()
 customers = Customers()
 carts = Carts()
+orders = Orders()
+
 
 def error_format(func):
     """ Декоратор для обработки любых исключений возникающих при работе сервиса
@@ -337,3 +339,44 @@ class Controller(EnviController):
         cart = carts.get_cart(int(request.get("cart_id")) if request.get("cart_id", None) else None)
         wishlist.copy_to(cart)
         return {"cart": cart.get_data()}
+
+    @classmethod
+    @error_format
+    def create_order(cls, request: Request, *args, **kwargs):
+        """ Метод для создания нового заказа
+        :param request:
+        :param args:
+        :param kwargs:
+        :return:
+        """
+        order_id = orders.create_order(int(request.get("customer_id")))
+        return {"order_id": order_id}
+
+    @classmethod
+    @error_format
+    def get_order(cls, request: Request, *args, **kwargs):
+        """ Метод для получения данных по заказу
+        :param request:
+        :param args:
+        :param kwargs:
+        :return:
+        """
+        return {"order": orders.get_order(int(request.get("order_id"))).get_data()}
+
+    @classmethod
+    @error_format
+    def get_orders_by_customer_id(cls, request: Request, *args, **kwargs):
+        """ Метод для получения заказов по переданному пользователю
+        :param request:
+        :param args:
+        :param kwargs:
+        :return:
+        """
+        return {
+            "orders": [
+                order.get_data()
+                for order in orders.get_orders_by_customer_id(
+                    int(request.get("customer_id")), limit=request.get("limit")
+                )
+            ]
+        }

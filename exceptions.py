@@ -55,3 +55,9 @@ class CustomerNotFound(BaseServiceException):
     """ Запрошенный товар не найден """
     code = 7
     msg = "Запрошенный покупатель не найден"
+
+
+class OrderNotFound(BaseServiceException):
+    """ Запрошенный заказ не найден """
+    code = 8
+    msg = "Запрошенный заказ не найден"
