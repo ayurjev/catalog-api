@@ -393,3 +393,16 @@ class Controller(EnviController):
                 )
             ]
         }
+
+    @classmethod
+    @error_format
+    def get_open_orders(cls, request: Request, *args, **kwargs):
+        """ Метод для получения невыполненных заказов
+        :param request:
+        :param args:
+        :param kwargs:
+        :return:
+        """
+        return {
+            "orders": [order.get_data() for order in orders.get_open_orders()]
+        }

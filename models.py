@@ -4,9 +4,11 @@ import re
 from exceptions import *
 from elasticsearch import Elasticsearch
 from datetime import datetime
-from pymongo import MongoClient, DESCENDING
+from pymongo import MongoClient, DESCENDING, ASCENDING
 from pymongo.errors import DuplicateKeyError
 from typing import Optional
+
+
 mongo_client = MongoClient('mongo', 27017)
 es_client = Elasticsearch([{'host': 'elasticsearch', 'port': 9200}])
 
@@ -661,6 +663,17 @@ class Orders(object):
             self.build_order(order_data)
             for order_data in self.orders.find(
                 {"customer_id": int(customer_id)}).limit(limit).sort([("created_dateime", DESCENDING)]
+            )
+        ]
+
+    def get_open_orders(self) -> ['Order']:
+        """ Возвращает список невыполненных заказов
+        :return:
+        """
+        return [
+            self.build_order(order_data)
+            for order_data in self.orders.find(
+                {"state": {"$ne": OrderStates.Done}}).sort([("created_dateime", ASCENDING)]
             )
         ]
 
